@@ -11,11 +11,14 @@ from urllib.parse import urljoin
 import pandas as pd
 import fileinput
 import logging
-
+import fasttext
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 logging.basicConfig(format='%(levelname)s:%(message)s')
+model = fasttext.load_model('/workspace/datasets/fasttext/queries_cat_1000_epoch_25.bin')
+
+
 
 # expects clicks and impressions to be in the row
 def create_prior_queries_from_group(
@@ -192,9 +195,33 @@ def create_query(user_query, click_prior_query, filters, use_synonyms = False, s
 
 def search(client, user_query, use_synonyms = False, index="bbuy_products", sort="_score", sortDir="desc"):
     #### W3: classify the query
+    categories, scores = model.predict(user_query, 10)
+    final_categories = []
+    threshold = .5
+    total_score = 0
+    boost = 10
+    
+    for category, score in zip(categories, scores):
+        if total_score < threshold:
+            total_score += score
+            temp_cat = category.split('__')[-1]
+            final_categories.append(temp_cat)
+        else:
+            break
+
+    print(final_categories)
     #### W3: create filters and boosts
+    filters = []
+    if len(categories) > 0:
+        category_filter = {
+            "terms" : {
+                "boost" : boost,
+                "categoryPathIds" : final_categories
+            }
+        }
+        filters.append(category_filter)
     # Note: you may also want to modify the `create_query` method above
-    query_obj = create_query(user_query, use_synonyms = use_synonyms, click_prior_query=None, filters=None, sort=sort, sortDir=sortDir, source=["name", "shortDescription"])
+    query_obj = create_query(user_query, use_synonyms = use_synonyms, click_prior_query=None, filters=filters, sort=sort, sortDir=sortDir, source=["name", "shortDescription"])
     logging.info(query_obj)
     response = client.search(query_obj, index=index)
     if response and response['hits']['hits'] and len(response['hits']['hits']) > 0:
