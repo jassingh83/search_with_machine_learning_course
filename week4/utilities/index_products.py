@@ -15,6 +15,10 @@ import requests
 import json
 
 from time import perf_counter
+from sentence_transformers import SentenceTransformer
+
+model = SentenceTransformer('all-MiniLM-L6-v2')
+print(model)
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -141,7 +145,8 @@ def index_file(file, index_name, reduced=False):
         docs_indexed += 1
         if docs_indexed % 200 == 0:
             logger.info("Indexing")
-            bulk(client, docs, request_timeout=60)
+            docs_with_embeddings = append_embeddings_to_docs(docs)
+            bulk(client, docs_with_embeddings, request_timeout=60)
             logger.info(f'{docs_indexed} documents indexed')
             docs = []
             names = []
@@ -150,8 +155,15 @@ def index_file(file, index_name, reduced=False):
         logger.info(f'{docs_indexed} documents indexed')
     return docs_indexed
 
+def append_embeddings_to_docs(docs):
+    names = list(map(lambda doc: doc['_source']['name'][0], docs))
+    embeddings = model.encode(names)
+    for i in range(len(docs)):
+        docs[i]['_source'].update({'name_embedding' : embeddings[i]})
+    return docs
+
 @click.command()
-@click.option('--source_dir', '-s', default='/workspace/datasets/product_data/products'. help='XML files source directory')
+@click.option('--source_dir', '-s', default='/workspace/datasets/product_data/products', help='XML files source directory')
 @click.option('--index_name', '-i', default="bbuy_products", help="The name of the index to write to")
 @click.option('--reduced', is_flag=True, show_default=True, default=False, help="Removes music, movies, and merchandised products.")
 def main(source_dir: str, index_name: str, reduced: bool):

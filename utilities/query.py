@@ -12,6 +12,10 @@ import pandas as pd
 import fileinput
 import logging
 import fasttext
+from sentence_transformers import SentenceTransformer
+import sys
+
+embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -49,6 +53,23 @@ def create_prior_queries(doc_ids, doc_id_weights,
             except KeyError as ke:
                 pass  # nothing to do in this case, it just means we can't find priors for this doc
     return click_prior_query
+
+
+def create_vector_query(user_query, size=10):
+    embeddings = embedding_model.encode([user_query])
+    query_embedding = embeddings[0]
+    query_obj = {
+                    "size": size,
+                    "query": {
+                        "knn": {
+                            "name_embedding": {
+                                "vector": query_embedding,
+                                "k": size
+                            }
+                        }
+                    }
+                }
+    return query_obj
 
 
 # Hardcoded query here.  Better to use search templates or other query config.
@@ -193,7 +214,7 @@ def create_query(user_query, click_prior_query, filters, use_synonyms = False, s
     return query_obj
 
 
-def search(client, user_query, use_synonyms = False, index="bbuy_products", sort="_score", sortDir="desc"):
+def search(client, user_query, use_synonyms = False, vector_search = False, index="bbuy_products", sort="_score", sortDir="desc"):
     #### W3: classify the query
     categories, scores = model.predict(user_query, 10)
     final_categories = []
@@ -221,7 +242,8 @@ def search(client, user_query, use_synonyms = False, index="bbuy_products", sort
         }
         filters.append(category_filter)
     # Note: you may also want to modify the `create_query` method above
-    query_obj = create_query(user_query, use_synonyms = use_synonyms, click_prior_query=None, filters=filters, sort=sort, sortDir=sortDir, source=["name", "shortDescription"])
+    query_obj = create_vector_query(user_query) if vector_search else create_query(user_query, use_synonyms = use_synonyms, click_prior_query=None, filters=filters, sort=sort, sortDir=sortDir, source=["name", "shortDescription"])
+
     logging.info(query_obj)
     response = client.search(query_obj, index=index)
     if response and response['hits']['hits'] and len(response['hits']['hits']) > 0:
@@ -245,7 +267,10 @@ if __name__ == "__main__":
                          help='The OpenSearch admin.  If this is set, the program will prompt for password too. If not set, use default of admin/admin')
     general.add_argument('--synonyms',
                          action='store_true',
-                         help='Enable Search on the name.synonym field.')                     
+                         help='Enable Search on the name.synonym field.')
+    general.add_argument('--vector',
+                         action='store_true',
+                         help='Enable Search on the name_embedding field.')                         
                         
     args = parser.parse_args()
 
@@ -273,13 +298,14 @@ if __name__ == "__main__":
 
     )
     index_name = args.index
+    vector = args.vector
     query_prompt = "\nEnter your query (type 'Exit' to exit or hit ctrl-c):"
     print(query_prompt)
-    for line in fileinput.input():
+    for line in sys.stdin:
         query = line.rstrip()
         if query == "Exit":
             break
-        search(client=opensearch, user_query=query, index=index_name, use_synonyms = args.synonyms)
+        search(client=opensearch, user_query=query, index=index_name, use_synonyms = args.synonyms, vector_search = vector)
 
         print(query_prompt)
 
